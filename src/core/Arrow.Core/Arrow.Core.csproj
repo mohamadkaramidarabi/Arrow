@@ -7,6 +7,28 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
     <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+
+    <IsPackable>true</IsPackable>
+    <PackageId>FP.Arrow.Core</PackageId>
+    <Version>1.0.5</Version>
+    <Authors>Mohammad Karami Darabi</Authors>
+    <Company>Arrow (.NET)</Company>
+    <Description>A .NET port of Arrow Kotlin arrow-core: Option, Either, Ior, Raise DSL, effects, and collection utilities for functional C#.</Description>
+    <PackageTags>arrow;functional;either;option;ior;raise;fp;monad</PackageTags>
+    <PackageLicenseExpression>Apache-2.0</PackageLicenseExpression>
+    <PackageProjectUrl>https://github.com/mohamadkaramidarabi/Arrow</PackageProjectUrl>
+    <RepositoryUrl>https://github.com/mohamadkaramidarabi/Arrow</RepositoryUrl>
+    <RepositoryType>git</RepositoryType>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
+    <IncludeSymbols>true</IncludeSymbols>
+    <SymbolPackageFormat>snupkg</SymbolPackageFormat>
+    <PublishRepositoryUrl>true</PublishRepositoryUrl>
+    <EmbedUntrackedSources>true</EmbedUntrackedSources>
+    <DebugType>portable</DebugType>
   </PropertyGroup>
+
+  <ItemGroup>
+    <None Include="..\..\..\README.md" Pack="true" PackagePath="\" />
+  </ItemGroup>
 
 </Project>

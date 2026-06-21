@@ -1,0 +1,152 @@
+name: Publish NuGet
+
+# Trusted publishing: register this workflow on nuget.org as "publish-nuget.yml"
+# Repository: mohamadkaramidarabi/Arrow
+# Docs: https://learn.microsoft.com/en-us/nuget/nuget-org/trusted-publishing
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Package version (for manual publish)
+        required: true
+        default: '1.0.5'
+
+env:
+  DOTNET_NOLOGO: true
+  DOTNET_CLI_TELEMETRY_OPTOUT: true
+  PACKAGE_ID: FP.Arrow.Core
+  PACKAGE_PROJECT: src/core/Arrow.Core/Arrow.Core.csproj
+  TEST_PROJECT: src/core/Arrow.Core.Test/Arrow.Core.Test.csproj
+  NUGET_SOURCE: https://api.nuget.org/v3/index.json
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+
+      - name: Resolve package version
+        shell: bash
+        run: |
+          if [[ "${{ github.ref_type }}" == "tag" ]]; then
+            VERSION="${GITHUB_REF#refs/tags/v}"
+          else
+            VERSION="${{ inputs.version }}"
+          fi
+
+          if [[ -z "$VERSION" ]]; then
+            echo "Package version could not be resolved."
+            exit 1
+          fi
+
+          PACKAGE_ID_LOWER="${PACKAGE_ID,,}"
+          echo "Resolved package version: $VERSION"
+          echo "VERSION=$VERSION" >> "$GITHUB_ENV"
+          echo "PACKAGE_ID_LOWER=$PACKAGE_ID_LOWER" >> "$GITHUB_ENV"
+
+      - name: Restore
+        run: dotnet restore Arrow.sln
+
+      - name: Test
+        run: dotnet test "${{ env.TEST_PROJECT }}" --configuration Release --no-restore
+
+      - name: Pack
+        run: >
+          dotnet pack "${{ env.PACKAGE_PROJECT }}"
+          --configuration Release
+          --no-restore
+          --output ./artifacts
+          /p:Version=${{ env.VERSION }}
+          /p:RepositoryUrl=https://github.com/${{ github.repository }}
+
+      - name: NuGet login (Trusted Publishing)
+        id: login
+        uses: NuGet/login@v1
+        with:
+          user: ${{ secrets.NUGET_USERNAME != '' && secrets.NUGET_USERNAME || github.repository_owner }}
+
+      - name: Publish to NuGet.org
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          NUPKG="./artifacts/${{ env.PACKAGE_ID }}.${{ env.VERSION }}.nupkg"
+          SNUPKG="./artifacts/${{ env.PACKAGE_ID }}.${{ env.VERSION }}.snupkg"
+          API_KEY="${{ steps.login.outputs.NUGET_API_KEY }}"
+          FLAT_URL="https://api.nuget.org/v3-flatcontainer/${{ env.PACKAGE_ID_LOWER }}/${{ env.VERSION }}/${{ env.PACKAGE_ID_LOWER }}.${{ env.VERSION }}.nupkg"
+
+          echo "Artifacts:"
+          ls -la ./artifacts/
+
+          if [[ ! -f "$NUPKG" ]]; then
+            echo "::error::Missing package: $NUPKG"
+            exit 1
+          fi
+
+          echo "Pushing main package: $NUPKG"
+          set +e
+          PUSH_OUTPUT="$(dotnet nuget push "$NUPKG" \
+            --api-key "$API_KEY" \
+            --source "${{ env.NUGET_SOURCE }}" \
+            --skip-duplicate 2>&1)"
+          PUSH_EXIT=$?
+          set -e
+          echo "$PUSH_OUTPUT"
+
+          if [[ $PUSH_EXIT -ne 0 ]]; then
+            echo "::error::Main package push failed. Check NUGET_USERNAME and trusted publisher setup."
+            exit 1
+          fi
+
+          echo "Waiting for ${{ env.PACKAGE_ID }} ${{ env.VERSION }} to be published on nuget.org..."
+          for attempt in $(seq 1 40); do
+            if curl -sfI "$FLAT_URL" | grep -qi "200"; then
+              echo "Main package is live."
+              break
+            fi
+            if [[ $attempt -eq 40 ]]; then
+              echo "::error::Main package was uploaded but is not published after 20 minutes."
+              echo "Check https://www.nuget.org -> Manage Packages for validation errors."
+              echo "If the version is stuck, publish a new version (do not re-push the same one)."
+              exit 1
+            fi
+            echo "Not available yet (${attempt}/40); waiting 30s..."
+            sleep 30
+          done
+
+          if [[ ! -f "$SNUPKG" ]]; then
+            echo "No symbol package; skipping."
+            exit 0
+          fi
+
+          echo "Pushing symbol package: $SNUPKG"
+          for attempt in $(seq 1 6); do
+            if dotnet nuget push "$SNUPKG" \
+              --api-key "$API_KEY" \
+              --source "${{ env.NUGET_SOURCE }}" \
+              --skip-duplicate; then
+              echo "Symbol package published."
+              exit 0
+            fi
+            if [[ $attempt -lt 6 ]]; then
+              echo "Symbol push failed; retrying in 30s (${attempt}/5)..."
+              sleep 30
+            fi
+          done
+
+          echo "::warning::Symbol package could not be published. Main package was published successfully."
+          echo "::warning::Re-run this workflow to retry symbols only."
