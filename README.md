@@ -48,6 +48,15 @@ dotnet build Arrow.sln
 dotnet test Arrow.sln
 ```
 
+## Publishing
+
+NuGet releases use **trusted publishing** (OIDC, no stored API keys). See **[docs/PUBLISHING.md](docs/PUBLISHING.md)** for setup and release steps.
+
+```bash
+git tag v0.1.0
+git push origin v0.1.0
+```
+
 ## Project layout
 
 ```

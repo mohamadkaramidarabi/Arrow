@@ -1,0 +1,110 @@
+name: Publish NuGet
+
+# Trusted publishing: register this workflow on nuget.org as "publish-nuget.yml"
+# Repository: mohamadkaramidarabi/Arrow
+# Docs: https://learn.microsoft.com/en-us/nuget/nuget-org/trusted-publishing
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Package version (e.g. 0.1.0). Ignored when triggered by a tag.'
+        required: true
+        default: '0.1.0'
+
+permissions:
+  contents: read
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write # required for NuGet trusted publishing (OIDC)
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+
+      - name: Set package version
+        shell: bash
+        run: |
+          if [[ "${{ github.ref_type }}" == "tag" ]]; then
+            VERSION="${GITHUB_REF_NAME#v}"
+          else
+            VERSION="${{ inputs.version }}"
+          fi
+          echo "VERSION=${VERSION}" >> "${GITHUB_ENV}"
+          echo "Publishing Arrow.Core version ${VERSION}"
+
+      - name: Restore
+        run: dotnet restore Arrow.sln
+
+      - name: Test
+        run: dotnet test Arrow.sln -c Release --no-restore --verbosity normal
+
+      - name: Pack
+        run: >
+          dotnet pack src/core/Arrow.Core/Arrow.Core.csproj
+          -c Release
+          --no-restore
+          -o ./artifacts
+          -p:Version=${{ env.VERSION }}
+
+      - name: NuGet login (OIDC trusted publishing)
+        uses: NuGet/login@v1
+        id: login
+        with:
+          # nuget.org profile name (not email). Store in repo secret NUGET_USERNAME.
+          user: ${{ secrets.NUGET_USERNAME }}
+
+      - name: Publish to NuGet.org
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          NUPKG="./artifacts/Arrow.Core.${VERSION}.nupkg"
+          SNUPKG="./artifacts/Arrow.Core.${VERSION}.snupkg"
+          API_KEY="${{ steps.login.outputs.NUGET_API_KEY }}"
+          SOURCE="https://api.nuget.org/v3/index.json"
+
+          echo "Artifacts:"
+          ls -la ./artifacts/
+
+          if [[ ! -f "$NUPKG" ]]; then
+            echo "::error::Missing package: $NUPKG"
+            exit 1
+          fi
+
+          echo "Pushing main package: $NUPKG"
+          dotnet nuget push "$NUPKG" \
+            --api-key "$API_KEY" \
+            --source "$SOURCE" \
+            --skip-duplicate
+
+          if [[ ! -f "$SNUPKG" ]]; then
+            echo "No symbol package at $SNUPKG; skipping symbols."
+            exit 0
+          fi
+
+          echo "Pushing symbol package: $SNUPKG"
+          for attempt in 1 2 3 4 5 6; do
+            if dotnet nuget push "$SNUPKG" \
+              --api-key "$API_KEY" \
+              --source "$SOURCE" \
+              --skip-duplicate; then
+              exit 0
+            fi
+            if (( attempt < 6 )); then
+              echo "Symbol push failed (main package may not be indexed yet); retrying in 30s (${attempt}/5)..."
+              sleep 30
+            fi
+          done
+          echo "::error::Failed to publish symbol package after retries."
+          exit 1
